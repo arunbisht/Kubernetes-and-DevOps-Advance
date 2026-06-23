@@ -6,12 +6,12 @@
 
 ## Repository & Links
 
-| Resource             | URL                                                                       |
-| -------------------- | ------------------------------------------------------------------------- |
-| GitHub Repository    | `https://github.com/arunbisht/Arun_3145347_Kubernetes-and-DevOps-Advance` |
-| Docker Hub Image     | `https://hub.docker.com/repository/docker/arunbisht25/employee-api`       |
-| API Endpoint (local) | `http://8.232.223.201/employees`                                          |
-| Health Check         | `http://8.232.223.201/health`                                             |
+| Resource             | URL                                                                 |
+| -------------------- | ------------------------------------------------------------------- |
+| GitHub Repository    | `https://github.com/arunbisht/Kubernetes-and-DevOps-Advance`        |
+| Docker Hub Image     | `https://hub.docker.com/repository/docker/arunbisht25/employee-api` |
+| API Endpoint (local) | `http://8.232.223.201/employees`                                    |
+| Health Check         | `http://8.232.223.201/health`                                       |
 
 ---
 
@@ -78,6 +78,30 @@ kubectl apply -f k8s/ingress.yaml
 ```bash
 kubectl get all -n employee-app
 curl http://192.168.49.2:30007/employees
+```
+
+---
+
+### In GCP Teminal
+
+#### Step 1 — Connect to your cluster first
+
+```bash
+gcloud container clusters get-credentials employee-cluster \
+  --zone=asia-south1-c \
+  --project=arun-kubernetes-and-devops
+```
+
+#### Step 2 — Then check your pods
+
+```bash
+kubectl get pods -n employee-app
+```
+
+#### Step 3 — Get your public IP
+
+```bash
+kubectl get ingress -n employee-app
 ```
 
 ---

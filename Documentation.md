@@ -37,21 +37,25 @@ The assignment required designing, containerizing, and deploying a multi-tier ar
 
 ## 2. Assumptions
 
-1. **Local Kubernetes cluster** (Minikube) is used instead of a cloud provider, which is sufficient for demonstrating all Kubernetes concepts required by the assignment.
+1. **Google Kubernetes Engine (GKE)** is used as the Kubernetes platform, providing a fully managed cluster with real public IP access, automatic persistent disk provisioning, and production-grade infrastructure.
 
-2. **MySQL 8.0** is used as the database, matching the version already used in the existing application.
+2. **Minikube** was also used during local development and testing before deploying to GKE. All YAML files are identical for both environments — demonstrating Kubernetes portability.
 
-3. **Node.js/Express** is used for the API tier since the candidate has prior experience with JavaScript.
+3. **MySQL 8.0** is used as the database, matching the version already used in the existing application.
 
-4. **Single namespace** (`employee-app`) is used to isolate all assignment resources from Kubernetes system components.
+4. **Node.js/Express** is used for the API tier since the candidate has prior experience with JavaScript.
 
-5. **NodePort + Ingress** combination is used for external access since Minikube does not have a cloud LoadBalancer provisioner.
+5. **Single namespace** (`employee-app`) is used to isolate all assignment resources from Kubernetes system components.
 
-6. **Root MySQL user** is used for simplicity in a local development context. In production, a dedicated user with minimal privileges would be created.
+6. **e2-small machine type** is used for GKE nodes to minimize GCP credit usage while still running all required workloads.
 
-7. **1Gi PersistentVolumeClaim** is sufficient for the dataset size (8 records).
+7. **Root MySQL user** is used for simplicity. In production, a dedicated user with minimal privileges would be created.
 
-8. **HPA target of 70% CPU** is a standard industry threshold that balances responsiveness with cost efficiency.
+8. **1Gi PersistentVolumeClaim** is sufficient for the dataset size (8 records). On GKE this automatically provisions a Google Persistent Disk SSD.
+
+9. **HPA target of 70% CPU** is a standard industry threshold that balances responsiveness with cost efficiency.
+
+10. **API resource requests reduced to 50m CPU / 64Mi memory** on GKE to accommodate e2-small node constraints where GKE system pods consume ~90% of resources by default.
 
 ---
 
@@ -63,36 +67,93 @@ The assignment required designing, containerizing, and deploying a multi-tier ar
 | API Framework | Node.js + Express v5 |
 | Database | MySQL 8.0 |
 | Containerization | Docker (node:20-alpine base) |
-| Container Registry | Docker Hub |
-| Orchestration | Kubernetes (Minikube) |
+| Container Registry | Docker Hub (arunbisht25) |
+| Local Orchestration | Kubernetes via Minikube |
+| Cloud Orchestration | Google Kubernetes Engine (GKE) |
+| Cloud Provider | Google Cloud Platform (GCP) |
+| GKE Cluster | employee-cluster, asia-south1-c |
+| GCP Project | arun-kubernetes-and-devops |
 | Ingress Controller | nginx |
 
 ### Architecture
-The solution implements a two-tier architecture:
+The solution implements a two-tier architecture deployed on GKE:
 
 **Tier 1 — Service API:**
 - Node.js Express application containerized with Docker
 - Deployed as a Kubernetes Deployment with 4 replicas
 - Each replica reads DB config from ConfigMap and Secret via environment variables
 - Health check endpoint (`/health`) enables liveness and readiness probes
-- Exposed externally via NodePort Service and Ingress
+- Exposed externally via NodePort Service and nginx Ingress with a real public IP
 
 **Tier 2 — Database:**
 - MySQL 8.0 deployed as a Kubernetes StatefulSet
-- Persistent storage via PersistentVolumeClaim (1Gi)
+- Persistent storage via PersistentVolumeClaim (1Gi) — automatically provisioned as a Google Persistent Disk SSD on GKE
 - Initialized with employees table and 8 records via init ConfigMap
 - Accessible only within the cluster via ClusterIP Service
 - DNS name `mysql-service` used for connection (never Pod IP)
 
 ### Communication Flow
 ```
-User Request
-    → Ingress (nginx, port 80)
+User (browser/curl)
+    → GKE Ingress (nginx, public IP, port 80)
     → api-service (NodePort, port 3000)
     → API Pod (Express app, port 3000)
     → mysql-service (ClusterIP, port 3306)
     → mysql-0 Pod (MySQL 8.0)
-    → PersistentVolumeClaim (1Gi disk)
+    → Google Persistent Disk (1Gi SSD, asia-south1-c)
+```
+
+### GCP Infrastructure
+| Resource | Details |
+|---|---|
+| Project | arun-kubernetes-and-devops |
+| Cluster | employee-cluster |
+| Zone | asia-south1-c (Mumbai) |
+| Node count | 3 nodes |
+| Machine type | e2-small (2 vCPU, 2GB RAM) |
+| Disk per node | 20GB |
+| Persistent Disk | Auto-provisioned 1Gi SSD for MySQL |
+| Public IP | Assigned automatically via GKE Ingress |
+
+### GKE Setup Commands
+```bash
+# Install gcloud CLI
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+
+# Authenticate
+gcloud init
+
+# Enable GKE API
+gcloud services enable container.googleapis.com \
+  --project=arun-kubernetes-and-devops
+
+# Create cluster
+gcloud container clusters create employee-cluster \
+  --project=arun-kubernetes-and-devops \
+  --zone=asia-south1-c \
+  --num-nodes=3 \
+  --machine-type=e2-small \
+  --disk-size=20GB
+
+# Connect kubectl to GKE
+gcloud container clusters get-credentials employee-cluster \
+  --zone=asia-south1-c \
+  --project=arun-kubernetes-and-devops
+```
+
+### Deployment Commands (GKE)
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/secret.yaml
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/mysql-init-configmap.yaml
+kubectl apply -f k8s/mysql-statefulset.yaml
+kubectl apply -f k8s/mysql-service.yaml
+kubectl apply -f k8s/api-deployment.yaml
+kubectl apply -f k8s/api-service.yaml
+kubectl apply -f k8s/hpa.yaml
+kubectl apply -f k8s/ingress.yaml
 ```
 
 ### Key Kubernetes Concepts Implemented
@@ -107,7 +168,7 @@ User Request
 
 **StatefulSet:** MySQL runs as a StatefulSet to ensure stable pod identity (`mysql-0`), ordered deployment, and persistent storage attachment on pod restart.
 
-**PersistentVolumeClaim:** 1Gi volume automatically provisioned and attached to MySQL pod. Data survives pod deletion and restart.
+**PersistentVolumeClaim:** 1Gi volume automatically provisioned on GKE as a Google Persistent Disk SSD. Data survives pod deletion and restart. Same YAML works on Minikube (hostPath) and GKE (Google PD) — demonstrating Kubernetes storage abstraction.
 
 **Deployment:** API runs as a Deployment with 4 replicas, RollingUpdate strategy, and resource requests/limits.
 
@@ -117,7 +178,7 @@ User Request
 
 **HPA:** Scales API pods between 2 and 8 based on CPU utilization threshold of 70%.
 
-**Ingress:** nginx Ingress routes external HTTP traffic to the API service.
+**Ingress:** nginx Ingress routes external HTTP traffic to the API service. On GKE, this automatically provisions a Google Cloud Load Balancer with a real public IP address.
 
 **Liveness Probe:** Kubernetes calls `/health` every 10 seconds. Failed probes trigger automatic pod restart (self-healing).
 
@@ -135,16 +196,16 @@ User Request
 ### API Deployment — 4 Replicas
 **Justification:** The assignment explicitly requires 4 pods for the API tier. Additionally, 4 replicas provides high availability — if one pod fails, 3 continue serving traffic with no user impact.
 
-### API Resource Limits
+### API Resource Requests/Limits (GKE-optimized)
 ```yaml
 requests:
-  memory: "128Mi"
-  cpu: "100m"
+  memory: "64Mi"
+  cpu: "50m"
 limits:
   memory: "256Mi"
   cpu: "200m"
 ```
-**Justification:** The Node.js Express app is lightweight. 100m CPU (0.1 core) is sufficient for handling API requests with connection pooling. 128Mi memory accommodates Node.js runtime + application code + connection pool. Limits are set at 2x requests to allow burst capacity while preventing any single pod from starving others.
+**Justification:** Requests were tuned down from initial values (128Mi/100m) after observing that e2-small GKE nodes had ~90% resources consumed by system pods, leaving insufficient space for 4 API replicas. 50m CPU and 64Mi memory requests allow all 4 pods to schedule across the 3-node cluster while limits remain generous enough to handle burst traffic.
 
 ### MySQL StatefulSet — 1 Replica
 **Justification:** The assignment requires exactly 1 database pod. A single replica is appropriate for this use case. MySQL read replicas would add cost and complexity without benefiting a single-user assignment workload.
@@ -161,19 +222,19 @@ limits:
 **Justification:** MySQL 8.0 requires more memory than the API tier for buffer pool, query cache, and InnoDB operations. 256Mi is the minimum for MySQL to run stably. CPU limit of 500m (0.5 core) is sufficient for the small dataset (8 records).
 
 ### PersistentVolumeClaim — 1Gi
-**Justification:** 1Gi is more than adequate for 8 employee records. The overhead is MySQL system tables and InnoDB data files which require ~200MB minimum. 1Gi provides headroom for growth while minimizing storage cost.
+**Justification:** 1Gi is more than adequate for 8 employee records. On GKE, this provisions a Google Persistent Disk SSD which has a minimum size of 1Gi. This provides headroom for data growth while minimizing storage cost (~$0.17/month for 1Gi in asia-south1).
+
+### GKE Cluster — 3 nodes, e2-small
+**Justification:** Initially 2 nodes were provisioned but were insufficient because GKE system pods (kube-dns, metrics-server, ingress controller etc.) consume ~90% of e2-small resources. Adding a third node provided enough headroom for all 4 API pods plus MySQL to schedule successfully. e2-small was chosen over larger machine types to minimize GCP credit consumption.
 
 ### HPA — minReplicas: 2, maxReplicas: 8, target: 70% CPU
 **Justification:**
-- `minReplicas: 2` ensures high availability even at zero traffic (one pod could fail and the other keeps serving)
-- `maxReplicas: 8` caps cost during traffic spikes while allowing 4x scale-out from the base
+- `minReplicas: 2` ensures high availability even at zero traffic
+- `maxReplicas: 8` caps cost during traffic spikes while allowing 4x scale-out
 - `70% CPU target` is the industry standard threshold — high enough to avoid over-provisioning, low enough to scale before saturation
 
 ### node:20-alpine Base Image
-**Justification:** Alpine Linux base keeps the image at ~180MB vs ~1GB for the full Node.js image. Smaller images reduce Docker Hub storage, pull time, and attack surface. Node.js 20 is the current LTS (Long Term Support) version, ensuring stability and security patches.
-
-### Minikube with 4096MB RAM, 2 CPUs
-**Justification:** MySQL requires ~256MB minimum, 4 API pods require ~512MB combined, and Kubernetes system components require ~1GB. 4096MB total provides sufficient headroom without over-allocating host resources. 2 CPUs allows concurrent pod scheduling without contention.
+**Justification:** Alpine Linux base keeps the image at ~180MB vs ~1GB for the full Node.js image. Smaller images reduce Docker Hub storage, pull time on GKE nodes, and attack surface. Node.js 20 is the current LTS version.
 
 ---
 
@@ -183,22 +244,34 @@ limits:
 **Current state:** Base replicas set to 4
 **Optimization:** HPA with minReplicas: 2 automatically scales down during low traffic
 **Estimated saving:** ~50% compute cost during nights/weekends when traffic is low
+**GCP context:** Each e2-small node costs ~$0.017/hour. Scaling from 3 to 2 nodes during off-peak saves ~$0.017/hour = ~$12/month
 
 ### Opportunity 2 — Lightweight Container Images
 **Current state:** node:20-alpine (~180MB) vs node:20 (~1GB)
 **Optimization:** Alpine base image already implemented
-**Benefit:** 5x smaller image = faster pulls, less registry storage, faster pod startup
+**Benefit:** 5x smaller image = faster pulls on GKE nodes, less Artifact Registry storage, faster pod startup times during scaling events
 
 ### Opportunity 3 — Right-sized Resource Requests
-**Current state:** Requests set based on actual observed usage
-**Optimization:** CPU requests set to 100m (not over-provisioned at 500m)
-**Benefit:** Kubernetes scheduler can pack more pods per node, reducing node count needed
+**Current state:** CPU requests tuned to 50m based on observed usage
+**Optimization:** Conservative requests allow Kubernetes scheduler to pack more pods per node
+**Benefit:** Reduces required node count — running 4 API pods on 3 e2-small nodes instead of needing 4 larger nodes
 
-### Opportunity 4 — Production Dependencies Only
+### Opportunity 4 — Delete Cluster After Demo
+**Current state:** GKE cluster running continuously
+**Optimization:** Per assignment instructions, cluster can be deleted after screen recording
+**Command:** `gcloud container clusters delete employee-cluster --zone=asia-south1-c`
+**Estimated saving:** Eliminates ~$1.22/day in compute costs after deliverables are captured
+
+### Opportunity 5 — Production Dependencies Only
 **Current state:** `npm install --production` excludes devDependencies
-**Benefit:** Smaller image, faster builds, reduced attack surface
+**Benefit:** Smaller image, faster builds, reduced attack surface, lower Docker Hub storage
 
-### Opportunity 5 — Single MySQL Replica
+### Opportunity 6 — Single MySQL Replica
 **Current state:** 1 MySQL replica (StatefulSet replicas: 1)
 **Optimization:** Not running unnecessary read replicas for this workload
-**Benefit:** Eliminates duplicate PVC storage costs and compute for unused replicas
+**Benefit:** Eliminates duplicate Google Persistent Disk costs (~$0.17/Gi/month) and compute for unused replicas
+
+### Opportunity 7 — Preemptible/Spot Nodes for Non-Critical Workloads
+**Future optimization:** GKE Spot VMs cost 60-90% less than regular VMs
+**Applicability:** API pods can run on Spot nodes since they are stateless and replaceable
+**MySQL exception:** Database pod should remain on regular nodes for stability
